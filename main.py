@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from pymongo import MongoClient
 import bcrypt
-from bson.objectid import ObjectId
 
 # Create the FastAPI app
 app = FastAPI()
@@ -23,48 +22,29 @@ db = client["CameraDb"]
 users_collection = db["users"]
 
 
-# Pydantic model to validate incoming data
-class User(BaseModel):
-    username: str
+# Pydantic model for SignIn
+class SignIn(BaseModel):
     email: EmailStr
     password: str
-    confirm_password: str
-
-    class Config:
-        schema_extra = {
-            "example": {
-                "username": "testuser",
-                "email": "test@example.com",
-                "password": "your_password",
-                "confirm_password": "your_password",
-            }
-        }
 
 
-# Register a new user
-@app.post("/register/")
-async def register_user(user: User):
-    # Check if passwords match
-    if user.password != user.confirm_password:
-        raise HTTPException(status_code=400, detail="Passwords do not match")
-
-    # Check if email already exists
+# SignIn user
+@app.post("/signin/")
+async def signin_user(user: SignIn):
+    # Find the user by email
     existing_user = users_collection.find_one({"email": user.email})
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email is already in use")
 
-    # Hash password before saving
-    hashed_password = bcrypt.hashpw(user.password.encode("utf-8"), bcrypt.gensalt())
+    if not existing_user:
+        raise HTTPException(status_code=400, detail="Email not found")
 
-    # Create new user
-    new_user = {
-        "username": user.username,
-        "email": user.email,
-        "password": hashed_password,
+    # Compare the provided password with the hashed password stored in the database
+    if not bcrypt.checkpw(user.password.encode("utf-8"), existing_user["password"]):
+        raise HTTPException(status_code=400, detail="Incorrect password")
+
+    # Return success response including username
+    return {
+        "message": "Login successful",
+        "user_id": str(existing_user["_id"]),
+        "username": existing_user.get("username", "Guest")  # Fallback to "Guest" if missing
     }
 
-    # Insert new user into the database
-    result = users_collection.insert_one(new_user)
-
-    # Return response
-    return {"message": "User created successfully", "user_id": str(result.inserted_id)}
