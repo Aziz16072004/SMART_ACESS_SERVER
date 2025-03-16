@@ -19,7 +19,9 @@ app.add_middleware(
 )
 
 # MongoDB connection setup (using pymongo)
-client = MongoClient("mongodb://localhost:27017")
+client = MongoClient(
+    "mongodb+srv://mouhamedazizchaabani:i3IAcNFcAlC3Ji5V@cluster0.l8e7h.mongodb.net/CameraDb?retryWrites=true&w=majority&appName=Cluster0"
+)
 db = client["CameraDb"]
 users_collection = db["users"]
 
