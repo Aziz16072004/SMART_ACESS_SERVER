@@ -21,7 +21,7 @@ app.add_middleware(
 # MongoDB connection setup
 MONGO_URI = os.getenv(
     "MONGO_URI",
-    "mongodb+srv://mouhamedazizchaabani:i3IAcNFcAlC3Ji5V@cluster0.l8e7h.mongodb.net/CameraDb?retryWrites=true&w=majority&appName=Cluster0",
+    "mongodb+srv://mouhamedazizchaabani:mouhamedazizchaabani@cluster0.o9yxb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
 )
 
 client = MongoClient(MONGO_URI)
