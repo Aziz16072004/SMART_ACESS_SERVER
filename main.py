@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from pymongo import MongoClient
 import bcrypt
+from dotenv import load_dotenv
 
 # Create the FastAPI app
 app = FastAPI()
@@ -18,12 +19,12 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-# MongoDB connection setup
-# MONGO_URI = os.getenv("MONGO_URI")
-# print(MONGO_URI)
-client = MongoClient(
-    "mongodb+srv://mouhamedazizchaabani:mouhamedazizchaabani@cluster0.o9yxb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-)
+load_dotenv()
+MONGO_URI = os.getenv("MONGO_URI")
+client = MongoClient(MONGO_URI)
+print(MONGO_URI)
+
+
 db = client["CameraDb"]
 users_collection = db["users"]
 
