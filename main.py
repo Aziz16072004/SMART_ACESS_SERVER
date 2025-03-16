@@ -19,9 +19,11 @@ app.add_middleware(
 )
 
 # MongoDB connection setup
-MONGO_URI = os.getenv("MONGO_URI")
-
-client = MongoClient(MONGO_URI)
+# MONGO_URI = os.getenv("MONGO_URI")
+# print(MONGO_URI)
+client = MongoClient(
+    "mongodb+srv://mouhamedazizchaabani:mouhamedazizchaabani@cluster0.o9yxb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+)
 db = client["CameraDb"]
 users_collection = db["users"]
 
@@ -59,9 +61,9 @@ async def signup_user(user: SignUp):
 # SignIn route
 @app.post("/test/")
 async def test():
-    var = os.getenv("MONGO_URI")
+
     return {
-        "message": var,
+        "message": "test sucess",
     }
 
 
