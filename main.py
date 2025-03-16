@@ -1,14 +1,11 @@
 import os
 import uvicorn
-from dotenv import load_dotenv
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from pymongo import MongoClient
 import bcrypt
 
-load_dotenv()
 # Create the FastAPI app
 app = FastAPI()
 
@@ -25,7 +22,7 @@ app.add_middleware(
 MONGO_URI = os.getenv("MONGO_URI")
 
 client = MongoClient(MONGO_URI)
-db = client.get_database()
+db = client["CameraDb"]
 users_collection = db["users"]
 
 
