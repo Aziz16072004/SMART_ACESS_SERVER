@@ -25,7 +25,7 @@ app.add_middleware(
 MONGO_URI = os.getenv("MONGO_URI")
 
 client = MongoClient(MONGO_URI)
-db = client["CameraDb"]
+db = client.get_database()
 users_collection = db["users"]
 
 
