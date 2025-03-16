@@ -1,85 +1,79 @@
+import os
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from pymongo import MongoClient
 import bcrypt
 
-
 # Create the FastAPI app
 app = FastAPI()
 
-
-# Add the CORS middleware to allow cross-origin requests
+# Add CORS middleware to allow cross-origin requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins to make requests
+    allow_origins=["*"],  # Allows all origins
     allow_credentials=True,
     allow_methods=["*"],  # Allows all HTTP methods
     allow_headers=["*"],  # Allows all headers
 )
 
-# MongoDB connection setup (using pymongo)
-client = MongoClient(
-    "mongodb+srv://mouhamedazizchaabani:i3IAcNFcAlC3Ji5V@cluster0.l8e7h.mongodb.net/CameraDb?retryWrites=true&w=majority&appName=Cluster0"
-)
+# MongoDB connection setup
+MONGO_URI = os.getenv("MONGO_URI", "your_mongodb_connection_string_here")
+client = MongoClient(MONGO_URI)
 db = client["CameraDb"]
 users_collection = db["users"]
 
 
-# Pydantic model for SignUp
+# Pydantic models
 class SignUp(BaseModel):
     username: str
     email: EmailStr
     password: str
 
 
-# Pydantic model for SignIn
 class SignIn(BaseModel):
     email: EmailStr
     password: str
 
 
-# SignUp user
+# SignUp route
 @app.post("/register/")
 async def signup_user(user: SignUp):
-    # Check if user already exists
     if users_collection.find_one({"email": user.email}):
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Hash the password
     hashed_password = bcrypt.hashpw(user.password.encode("utf-8"), bcrypt.gensalt())
 
-    # Create user document
     user_data = {
         "username": user.username,
         "email": user.email,
         "password": hashed_password,
     }
-
-    # Insert into database
     users_collection.insert_one(user_data)
 
     return {"message": "User registered successfully"}
 
 
-# SignIn user
+# SignIn route
 @app.post("/signin/")
 async def signin_user(user: SignIn):
-    # Find the user by email
     existing_user = users_collection.find_one({"email": user.email})
 
     if not existing_user:
         raise HTTPException(status_code=400, detail="Email not found")
 
-    # Compare the provided password with the hashed password stored in the database
     if not bcrypt.checkpw(user.password.encode("utf-8"), existing_user["password"]):
         raise HTTPException(status_code=400, detail="Incorrect password")
 
-    # Return success response including username
     return {
         "message": "Login successful",
         "user_id": str(existing_user["_id"]),
-        "username": existing_user.get(
-            "username", "Guest"
-        ),  # Fallback to "Guest" if missing
+        "username": existing_user.get("username", "Guest"),
     }
+
+
+# Run FastAPI on Render-compatible port
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
