@@ -59,8 +59,9 @@ async def signup_user(user: SignUp):
 # SignIn route
 @app.post("/test/")
 async def test():
+    var = os.getenv("MONGO_URI")
     return {
-        "message": "Login successful",
+        "message": var,
     }
 
 
