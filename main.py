@@ -23,6 +23,7 @@ MONGO_URI = os.getenv(
     "MONGO_URI",
     "mongodb+srv://mouhamedazizchaabani:i3IAcNFcAlC3Ji5V@cluster0.l8e7h.mongodb.net/CameraDb?retryWrites=true&w=majority&appName=Cluster0",
 )
+
 client = MongoClient(MONGO_URI)
 db = client["CameraDb"]
 users_collection = db["users"]
@@ -59,6 +60,13 @@ async def signup_user(user: SignUp):
 
 
 # SignIn route
+@app.post("/test/")
+async def test():
+    return {
+        "message": "Login successful",
+    }
+
+
 @app.post("/signin/")
 async def signin_user(user: SignIn):
     existing_user = users_collection.find_one({"email": user.email})
