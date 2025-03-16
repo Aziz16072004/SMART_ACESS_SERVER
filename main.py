@@ -4,8 +4,10 @@ from pydantic import BaseModel, EmailStr
 from pymongo import MongoClient
 import bcrypt
 
+
 # Create the FastAPI app
 app = FastAPI()
+
 
 # Add the CORS middleware to allow cross-origin requests
 app.add_middleware(
@@ -22,10 +24,40 @@ db = client["CameraDb"]
 users_collection = db["users"]
 
 
+# Pydantic model for SignUp
+class SignUp(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+
+
 # Pydantic model for SignIn
 class SignIn(BaseModel):
     email: EmailStr
     password: str
+
+
+# SignUp user
+@app.post("/register/")
+async def signup_user(user: SignUp):
+    # Check if user already exists
+    if users_collection.find_one({"email": user.email}):
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Hash the password
+    hashed_password = bcrypt.hashpw(user.password.encode("utf-8"), bcrypt.gensalt())
+
+    # Create user document
+    user_data = {
+        "username": user.username,
+        "email": user.email,
+        "password": hashed_password,
+    }
+
+    # Insert into database
+    users_collection.insert_one(user_data)
+
+    return {"message": "User registered successfully"}
 
 
 # SignIn user
@@ -45,6 +77,7 @@ async def signin_user(user: SignIn):
     return {
         "message": "Login successful",
         "user_id": str(existing_user["_id"]),
-        "username": existing_user.get("username", "Guest")  # Fallback to "Guest" if missing
+        "username": existing_user.get(
+            "username", "Guest"
+        ),  # Fallback to "Guest" if missing
     }
-
