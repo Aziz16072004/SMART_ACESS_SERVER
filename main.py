@@ -1,11 +1,12 @@
 import os
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from pymongo import MongoClient
 import bcrypt
 from dotenv import load_dotenv
+from datetime import datetime
 
 # Create the FastAPI app
 app = FastAPI()
@@ -83,6 +84,15 @@ async def signin_user(user: SignIn):
         "user_id": str(existing_user["_id"]),
         "username": existing_user.get("username", "Guest"),
     }
+
+
+@app.post("/upload")
+async def upload_image(image: UploadFile = File(...)):
+    filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{image.filename}"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+    with open(file_path, "wb") as buffer:
+        buffer.write(await image.read())
+    return JSONResponse(content={"message": "Image saved!", "filename": filename})
 
 
 # Run FastAPI on Render-compatible port
