@@ -5,7 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from pymongo import MongoClient
 from fastapi.responses import JSONResponse
-
 import bcrypt
 from dotenv import load_dotenv
 from datetime import datetime
@@ -25,8 +24,6 @@ app.add_middleware(
 load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
-print(MONGO_URI)
-
 
 db = client["CameraDb"]
 users_collection = db["users"]
@@ -63,14 +60,6 @@ async def signup_user(user: SignUp):
 
 
 # SignIn route
-@app.post("/test/")
-async def test():
-
-    return {
-        "message": "test sucess",
-    }
-
-
 @app.post("/signin/")
 async def signin_user(user: SignIn):
     existing_user = users_collection.find_one({"email": user.email})
@@ -88,6 +77,7 @@ async def signin_user(user: SignIn):
     }
 
 
+# Upload route
 @app.post("/upload")
 async def upload_image(image: UploadFile = File(...)):
     filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{image.filename}"
