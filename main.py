@@ -11,6 +11,12 @@ from fastapi.responses import JSONResponse
 import bcrypt
 from dotenv import load_dotenv
 from datetime import datetime
+import google.auth
+from google.auth.transport.requests import Request
+from google.oauth2 import service_account
+import json
+import jwt
+import shutil
 
 # Create the FastAPI app
 app = FastAPI()
@@ -18,7 +24,8 @@ upload_dir = "faces/"
 
 if not os.path.exists(upload_dir):
     os.makedirs(upload_dir)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/faces", StaticFiles(directory="faces"), name="faces")
+
 # Add CORS middleware to allow cross-origin requests
 app.add_middleware(
     CORSMiddleware,
@@ -61,6 +68,70 @@ class History(BaseModel):
     userId: str
     registered: bool
     timestamp: datetime
+
+
+class NotificationData(BaseModel):
+    fcm_token: str
+    title: str
+    body: str
+
+
+# Firebase Cloud Messaging credentials
+PROJECT_ID = "smartaccess-3df78"
+SERVICE_ACCOUNT_FILE = "smartaccess-3df78-firebase-adminsdk-fbsvc-94740c8ae5.json"
+
+
+def get_access_token():
+    # Load the service account file
+    with open(SERVICE_ACCOUNT_FILE, "r") as file:
+        service_account_info = json.load(file)
+
+    # Create credentials with the correct scope for Firebase Cloud Messaging
+    scopes = ["https://www.googleapis.com/auth/firebase.messaging"]
+    credentials = service_account.Credentials.from_service_account_info(
+        service_account_info, scopes=scopes
+    )
+
+    # Refresh the credentials to get the access token
+    credentials.refresh(Request())
+
+    return credentials.token
+
+
+@app.post("/send_notification/")
+async def send_notification(notification: NotificationData):
+    # Get the access token
+    access_token = get_access_token()
+    print(f"Access token: {access_token}")
+
+    # FCM HTTP v1 API URL
+    url = f"https://fcm.googleapis.com/v1/projects/{PROJECT_ID}/messages:send"
+
+    # Set up headers for the request
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+
+    # Prepare the message payload
+    message = {
+        "message": {
+            "token": notification.fcm_token,
+            "notification": {
+                "title": notification.title,
+                "body": notification.body,
+            },
+        }
+    }
+
+    # Send the notification via HTTP POST request
+    response = requests.post(url, json=message, headers=headers)
+
+    # Check if the request was successful
+    if response.status_code == 200:
+        return {"message": "Notification sent successfully"}
+    else:
+        return {"error": response.text}
 
 
 # SignUp route
@@ -127,6 +198,17 @@ async def upload_image(
         with open(file_path, "wb") as buffer:
             buffer.write(await image.read())
 
+        # Create a new picture document to insert into MongoDB
+        picture_data = {
+            "userId": userId,
+            "name": name,
+            "picture": file_path,  # Store the file path or URL
+            "accessLevel": accessLevel,
+        }
+
+        # Insert the picture data into the database
+        pictures_collection.insert_one(picture_data)
+
         # Return a response with the picture data
         return JSONResponse(
             content={
@@ -177,9 +259,11 @@ async def delete_picture(picture_id: str):
         # Get the file URL from the picture document (this is where the image is stored)
         file_url = picture["picture"]  # e.g., "/static/uploads/filename"
 
-        # Extract the filename from the file_url
-        filename = file_url.split("/")[-1]
-        file_path = os.path.join(upload_dir, filename)
+        # Extract the filename and directory from the file_url
+        path_parts = file_url.split("/")
+        directory = os.path.join(upload_dir, *path_parts[1:-1])  # e.g., "faces/mohamed"
+        filename = path_parts[-1]
+        file_path = os.path.join(directory, filename)
 
         # Check if the file exists and delete it
         if os.path.exists(file_path):
@@ -189,6 +273,10 @@ async def delete_picture(picture_id: str):
                 content={"error": "File not found on the server"},
                 status_code=404,
             )
+
+        # Check if the directory is empty and remove it
+        if not os.listdir(directory):  # Check if directory is empty
+            shutil.rmtree(directory)  # Delete the empty directory
 
         # Delete the picture from MongoDB
         result = pictures_collection.delete_one({"_id": ObjectId(picture_id)})
@@ -201,9 +289,12 @@ async def delete_picture(picture_id: str):
 
         return JSONResponse(
             content={
-                "message": "Picture deleted successfully, both from database and server"
+                "message": "Picture and directory deleted successfully, both from database and server"
             },
         )
+
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
@@ -261,42 +352,6 @@ async def add_history(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-FCM_SERVER_KEY = "dSm7Tw7TTsyTXGNaYO2wfr:APA91bEurfEhBLTH1_lLDQ9d78RTWdOj0PC9Ok9mEU9BXRJVQfp1bAv_1ON2CQevvJVGvJKbObkIV4Lj_5DXuix2zrMLKh3IuVwtJYbm-XmZT0GvhOtSvvY"
-
-
-class NotificationData(BaseModel):
-    title: str
-    body: str
-    fcm_token: str  # The target device FCM token
-
-
-@app.post("/send_notification/")
-async def send_notification(notification: NotificationData):
-    # Firebase Cloud Messaging URL
-    url = "https://fcm.googleapis.com/fcm/send"
-
-    headers = {
-        "Authorization": f"key={FCM_SERVER_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    data = {
-        "to": notification.fcm_token,  # The FCM token of the target device
-        "notification": {"title": notification.title, "body": notification.body},
-        "data": {"event": "face_detected", "timestamp": "1625061800"},
-    }
-
-    # Send the push notification
-    response = requests.post(url, headers=headers, json=data)
-
-    # Check if the notification was sent successfully
-    if response.status_code == 200:
-        return {"message": "Notification sent successfully"}
-    else:
-        return {"error": response.text}
-
-
-# Run FastAPI on Render-compatible port
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)

@@ -3,30 +3,15 @@ import numpy as np
 import face_recognition
 import os
 import requests
-
-# 🔐 FCM config
-FCM_SERVER_KEY = "YOUR_FCM_SERVER_KEY"
-DEVICE_FCM_TOKEN = "YOUR_DEVICE_FCM_TOKEN"
-
-
-def send_push_notification(title, body):
-    url = "https://fcm.googleapis.com/fcm/send"
-    headers = {
-        "Authorization": f"key={FCM_SERVER_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {"to": DEVICE_FCM_TOKEN, "notification": {"title": title, "body": body}}
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        print("✅ Notification sent successfully!")
-    else:
-        print("❌ Failed to send notification:", response.text)
+from dotenv import load_dotenv
 
 
 encodings = []
 names = []
-
+load_dotenv()
 database_path = "faces/"
+FCM_TOKEN = os.getenv("FCM_TOKEN")
+API_URL = os.getenv("API_URL")
 
 # Load face encodings from the database
 print("Loading face database...")
@@ -79,14 +64,25 @@ while True:
             encodings, face_encoding, tolerance=0.7
         )
         name = "Visitor - Access Pending"
-
         # If there's a match, get the name of the person
         if True in matches:
             matched_names = [names[i] for i, match in enumerate(matches) if match]
             name = max(set(matched_names), key=matched_names.count)
             print(f"Recognized {name}!")
         else:
-            print("No match found, access pending.")
+            try:
+                response = requests.post(
+                    f"{API_URL}/send_notification/",
+                    json={
+                        "fcm_token": FCM_TOKEN,
+                        "title": "No user Match",
+                        "body": "unregistred people",
+                    },
+                )
+                print("Notification response:", response.text)
+                time.sleep(8)
+            except Exception as e:
+                print("Error sending notification:", e)
 
         # Draw bounding box and label
         cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
