@@ -1,5 +1,9 @@
 import os
 import uvicorn
+from typing import List
+import aiofiles
+import socketio
+
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
@@ -20,19 +24,25 @@ import shutil
 
 # Create the FastAPI app
 app = FastAPI()
-upload_dir = "faces/"
 
+# Socket.IO setup
+sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
+socket_app = socketio.ASGIApp(sio, app)
+
+# Mount static files
+upload_dir = "faces/"
 if not os.path.exists(upload_dir):
     os.makedirs(upload_dir)
 app.mount("/faces", StaticFiles(directory="faces"), name="faces")
+app.mount("/history", StaticFiles(directory="history"), name="history")
 
 # Add CORS middleware to allow cross-origin requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all HTTP methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 load_dotenv()
@@ -43,6 +53,9 @@ db = client["CameraDb"]
 users_collection = db["users"]
 pictures_collection = db["pictures"]
 history_collection = db["history"]
+
+# Store notification counts (in production, use a database)
+notification_counts = {}
 
 
 # Pydantic models
@@ -76,25 +89,27 @@ class NotificationData(BaseModel):
     body: str
 
 
+class AccessHistoryItem(BaseModel):
+    user: str
+    time: str
+    status: bool
+
+
 # Firebase Cloud Messaging credentials
 PROJECT_ID = "smartaccess-3df78"
-SERVICE_ACCOUNT_FILE = "smartaccess-3df78-firebase-adminsdk-fbsvc-94740c8ae5.json"
+SERVICE_ACCOUNT_FILE = "smartaccess-3df78-firebase-adminsdk-fbsvc-7f6ca951c9.json"
 
 
 def get_access_token():
-    # Load the service account file
     with open(SERVICE_ACCOUNT_FILE, "r") as file:
         service_account_info = json.load(file)
 
-    # Create credentials with the correct scope for Firebase Cloud Messaging
     scopes = ["https://www.googleapis.com/auth/firebase.messaging"]
     credentials = service_account.Credentials.from_service_account_info(
         service_account_info, scopes=scopes
     )
 
-    # Refresh the credentials to get the access token
     credentials.refresh(Request())
-
     return credentials.token
 
 
@@ -102,7 +117,6 @@ def get_access_token():
 async def send_notification(notification: NotificationData):
     # Get the access token
     access_token = get_access_token()
-    print(f"Access token: {access_token}")
 
     # FCM HTTP v1 API URL
     url = f"https://fcm.googleapis.com/v1/projects/{PROJECT_ID}/messages:send"
@@ -127,11 +141,58 @@ async def send_notification(notification: NotificationData):
     # Send the notification via HTTP POST request
     response = requests.post(url, json=message, headers=headers)
 
+    # Update notification count and emit Socket.IO event
+    user_id = "blabla"
+    notification_counts[user_id] = notification_counts.get(user_id, 0) + 1
+    await sio.emit(
+        "notification_count",
+        {"user_id": user_id, "count": notification_counts[user_id]},
+    )
+
     # Check if the request was successful
     if response.status_code == 200:
         return {"message": "Notification sent successfully"}
     else:
         return {"error": response.text}
+
+
+# Socket.IO events
+@sio.event
+async def connect(sid, environ):
+    print(f"Client connected: {sid}")
+
+
+@sio.event
+async def reset_notification_counts(sid):
+    # Reset all notification counts
+    print("reset")
+    global notification_counts
+    notification_counts = {}
+
+    # Emit a confirmation to all clients that the counts have been reset
+    await sio.emit(
+        "notification_counts_reset", {"message": "Notification counts have been reset."}
+    )
+    print("Notification counts reset for all users.")
+
+
+@sio.event
+async def disconnect(sid):
+    print(f"Client disconnected: {sid}")
+
+
+@sio.event
+async def join_room(sid, data):
+    user_id = data["user_id"]
+    sio.enter_room(sid, user_id)
+    print(f"User {user_id} joined room")
+    # Send current count when user joins
+    await sio.emit(
+        "notification_count",
+        {"user_id": user_id, "count": notification_counts.get(user_id, 0)},
+        room=user_id,
+    )
+    print("user connected ", data)
 
 
 # SignUp route
@@ -170,46 +231,63 @@ async def signin_user(user: SignIn):
     }
 
 
-upload_dir = "faces/"
-
-# Ensure the base directory exists
-if not os.path.exists(upload_dir):
-    os.makedirs(upload_dir)
+def copy_file(src_path, dest_dir):
+    try:
+        if not os.path.exists(dest_dir):
+            os.makedirs(dest_dir, exist_ok=True)
+        dest_file_path = os.path.join(dest_dir, os.path.basename(src_path))
+        shutil.copy(src_path, dest_file_path)
+        return dest_file_path
+    except Exception as e:
+        raise Exception(f"Error copying file: {e}")
 
 
 @app.post("/upload")
 async def upload_image(
-    image: UploadFile = File(...),
+    image: UploadFile = File(None),
+    imageUrl: str = Form(None),
     userId: str = Form(...),
     name: str = Form(...),
     accessLevel: str = Form(...),
 ):
+    print("image:", image)
+    print("imageUrl:", imageUrl)
+    print("userId:", userId)
+    print("name:", name)
+    print("accessLevel:", accessLevel)
+
+    person_dir = os.path.join(upload_dir, name)
+    os.makedirs(person_dir, exist_ok=True)
+
     try:
-        # Create a subdirectory for the person if it doesn't exist
-        person_dir = os.path.join(upload_dir, name)
-        if not os.path.exists(person_dir):
-            os.makedirs(person_dir)
+        file_path = None
 
-        # Generate a unique filename
-        filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{image.filename}"
-        file_path = os.path.join(person_dir, filename)
+        if image:
+            filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{image.filename}"
+            file_path = os.path.join(person_dir, filename)
 
-        # Save the file
-        with open(file_path, "wb") as buffer:
-            buffer.write(await image.read())
+            async with aiofiles.open(file_path, "wb") as out_file:
+                content = await image.read()
+                await out_file.write(content)
 
-        # Create a new picture document to insert into MongoDB
+        elif imageUrl:
+            local_image_path = imageUrl[imageUrl.find("history/") :]
+            file_path = copy_file(local_image_path, person_dir)
+
+        else:
+            return JSONResponse(
+                content={"error": "No image or imageUrl provided"}, status_code=400
+            )
+
         picture_data = {
             "userId": userId,
             "name": name,
-            "picture": file_path,  # Store the file path or URL
+            "picture": file_path,
             "accessLevel": accessLevel,
         }
 
-        # Insert the picture data into the database
         pictures_collection.insert_one(picture_data)
 
-        # Return a response with the picture data
         return JSONResponse(
             content={
                 "message": "Image uploaded and saved!",
@@ -227,10 +305,8 @@ async def upload_image(
 @app.get("/pictures/{user_id}")
 async def get_user_pictures(user_id: str):
     try:
-        # Find all pictures for the given user ID
         pictures = list(pictures_collection.find({"userId": user_id}))
 
-        # Convert ObjectId to string for each picture
         for picture in pictures:
             picture["_id"] = str(picture["_id"])
 
@@ -247,7 +323,6 @@ async def get_user_pictures(user_id: str):
 @app.delete("/pictures/{picture_id}")
 async def delete_picture(picture_id: str):
     try:
-        # Find the picture from the database using its ObjectId
         picture = pictures_collection.find_one({"_id": ObjectId(picture_id)})
 
         if not picture:
@@ -256,29 +331,36 @@ async def delete_picture(picture_id: str):
                 status_code=404,
             )
 
-        # Get the file URL from the picture document (this is where the image is stored)
-        file_url = picture["picture"]  # e.g., "/static/uploads/filename"
-
-        # Extract the filename and directory from the file_url
+        file_url = picture.get("picture")
         path_parts = file_url.split("/")
-        directory = os.path.join(upload_dir, *path_parts[1:-1])  # e.g., "faces/mohamed"
+        directory = os.path.join(upload_dir, *path_parts[1:-1])
         filename = path_parts[-1]
         file_path = os.path.join(directory, filename)
 
-        # Check if the file exists and delete it
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        else:
+        # If the file doesn't exist, just delete the record from MongoDB
+        if not os.path.exists(file_path):
+            result = pictures_collection.delete_one({"_id": ObjectId(picture_id)})
+
+            if result.deleted_count == 0:
+                return JSONResponse(
+                    content={"error": "Failed to delete the picture from the database"},
+                    status_code=500,
+                )
+
             return JSONResponse(
-                content={"error": "File not found on the server"},
-                status_code=404,
+                content={
+                    "message": "Picture record deleted successfully from database (file not found)"
+                },
             )
 
-        # Check if the directory is empty and remove it
-        if not os.listdir(directory):  # Check if directory is empty
-            shutil.rmtree(directory)  # Delete the empty directory
+        # If file exists, delete the image file from the server
+        os.remove(file_path)
 
-        # Delete the picture from MongoDB
+        # Remove the directory if it's empty
+        if not os.listdir(directory):
+            shutil.rmtree(directory)
+
+        # Finally, delete the record from MongoDB
         result = pictures_collection.delete_one({"_id": ObjectId(picture_id)})
 
         if result.deleted_count == 0:
@@ -296,17 +378,12 @@ async def delete_picture(picture_id: str):
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
 
 @app.get("/history/{user_id}")
 async def get_user_history(user_id: str):
     try:
-        # Find all history records for the given user ID
         history = list(history_collection.find({"userId": user_id}))
 
-        # Convert ObjectId to string for each history entry
         for entry in history:
             entry["_id"] = str(entry["_id"])
 
@@ -326,19 +403,16 @@ async def add_history(
     registered: bool = Form(...),
 ):
     try:
-        # Create a new history entry with the given userId and registered status
         history_entry = History(
             userId=userId,
             registered=registered,
             timestamp=datetime.now(),
         )
 
-        # Insert the history entry into the MongoDB collection
         history_dict = history_entry.dict()
         history_collection = db["history"]
         result = history_collection.insert_one(history_dict)
 
-        # Return a response with the newly created history entry
         return JSONResponse(
             content={
                 "message": "History entry added successfully!",
@@ -348,9 +422,83 @@ async def add_history(
         )
 
     except Exception as e:
-        # If there's an error, return a response with the error message
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/access-history")
+async def get_access_history():
+    try:
+        records = list(history_collection.find())
+
+        history_data = [
+            {
+                "user": record.get("name", "Unknown User"),
+                "time": (
+                    record["date"].strftime("%Y-%m-%d %H:%M:%S")
+                    if isinstance(record["date"], datetime)
+                    else record["date"]
+                ),
+                "status": record.get("status", False),
+                "image_path": record.get("image_path", ""),
+            }
+            for record in records
+        ]
+        history_data.reverse()
+
+        return history_data
+
+    except Exception as e:
+        return JSONResponse(
+            content={"error": f"Failed to fetch access history: {str(e)}"},
+            status_code=500,
+        )
+
+
+def delete_files_in_batches(directory, batch_size=50):
+    try:
+        files = os.listdir(directory)
+        total_files = len(files)
+
+        # Process files in batches
+        for i in range(0, total_files, batch_size):
+            batch_files = files[i : i + batch_size]
+            for file in batch_files:
+                file_path = os.path.join(directory, file)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+
+        return {
+            "message": f"Deleted {total_files} files from {directory} successfully."
+        }
+    except Exception as e:
+        return {"error": f"Failed to delete files: {str(e)}"}
+
+
+@app.delete("/historyDelete")
+async def clear_history():
+    try:
+        # Delete all documents from the MongoDB collection
+        result = history_collection.delete_many({})
+
+        # Delete all files in the 'history' directory
+        history_dir = "history"
+        if os.path.exists(history_dir):
+            for file in os.listdir(history_dir):
+                file_path = os.path.join(history_dir, file)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+
+        return {
+            "status": "success",
+            "deleted_count": result.deleted_count,
+            "message": "History directory cleared",
+        }
+    except Exception as e:
+        return {"error": f"An error occurred during history deletion: {str(e)}"}
+
+
+# Mount the Socket.IO app
+app.mount("/", socket_app)
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
